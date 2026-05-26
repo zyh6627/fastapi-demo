@@ -1,0 +1,13 @@
+# Python 忽略文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.idea/
+*.sqlite3
+*.db
+*.log
