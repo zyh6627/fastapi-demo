@@ -1,16 +1,16 @@
-from fastapi import FastAPI, Form, Depends
+from fastapi import FastAPI, Form, Depends, HTTPException, Cookie
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
+from uuid import uuid4
+
 from database import engine, SessionLocal
 from models import Base, User
+from utils import get_password_hash, verify_password
 
-# 创建数据库表
 Base.metadata.create_all(bind=engine)
-
 app = FastAPI()
+login_users = {}
 
-
-# 获取数据库连接
 def get_db():
     db = SessionLocal()
     try:
@@ -18,117 +18,57 @@ def get_db():
     finally:
         db.close()
 
+# 权限校验（从Cookie拿token）
+def require_login(token: str = Cookie(None)):
+    if not token or token not in login_users:
+        raise HTTPException(status_code=403, detail="请先登录")
+    return login_users[token]
 
-# 基础接口
-@app.get("/")
-def home():
-    return {"message": "Hello FastAPI 全栈项目！"}
-
-
-@app.get("/user")
-def get_user():
-    return {
-        "username": "fastapi_user",
-        "age": 20,
-        "email": "user@example.com"
-    }
-
-
-@app.get("/greet")
-def greet(name: str):
-    return {"message": f"你好 {name}！欢迎使用 FastAPI"}
-
-
-# 前端页面（带表单）
 @app.get("/page", response_class=HTMLResponse)
-def index_page():
-    html_content = """
+def page():
+    return HTMLResponse("""
     <html>
-        <head>
-            <title>FastAPI 全栈页面</title>
-            <style>
-                body { font-family: 微软雅黑; margin: 40px; }
-                .box { padding: 20px; background: #f5f5f5; border-radius: 8px; max-width: 400px; }
-                input { padding: 8px; margin: 5px; width: 200px; }
-                button { padding: 8px 16px; background: #4285f4; color: white; border: none; border-radius: 4px; }
-            </style>
-        </head>
         <body>
-            <h1>✅ FastAPI 全栈项目</h1>
-            <div class="box">
-                <h3>用户信息表单</h3>
-                <form action="/submit" method="post">
-                    <input type="text" name="username" placeholder="输入姓名" required><br>
-                    <input type="number" name="age" placeholder="输入年龄" required><br>
-                    <button type="submit">提交并保存到数据库</button>
-                </form>
-            </div>
+        <h2>注册</h2>
+        <form action="/register" method="post">
+            <input name="username" placeholder="用户名" required><br>
+            <input name="age" type="number" placeholder="年龄" required><br>
+            <input name="password" type="password" placeholder="密码" required><br>
+            <button>注册</button>
+        </form>
+        <hr>
+        <h2>登录</h2>
+        <form action="/login" method="post">
+            <input name="username" placeholder="用户名" required><br>
+            <input name="password" type="password" placeholder="密码" required><br>
+            <button>登录</button>
+        </form>
         </body>
     </html>
-    """
-    return html_content
+    """)
 
-
-# 【核心功能】接收表单，存入数据库
-@app.post("/submit")
-def submit_form(
-        username: str = Form(...),
-        age: int = Form(...),
-        db: Session = Depends(get_db)
-):
-    # 1. 创建用户对象
-    user = User(username=username, age=age)
-
-    # 2. 加入数据库
-    db.add(user)
+@app.post("/register")
+def register(username: str=Form(...), age:int=Form(...), password:str=Form(...), db:Session=Depends(get_db)):
+    if db.query(User).filter(User.username==username).first():
+        raise HTTPException(400, detail="用户名已存在")
+    u = User(username=username, age=age, password=get_password_hash(password))
+    db.add(u)
     db.commit()
-    db.refresh(user)
+    return {"msg":"注册成功"}
 
-    return {
-        "status": "success",
-        "msg": "用户已保存到数据库",
-        "id": user.id,
-        "username": user.username,
-        "age": user.age
-    }
+@app.post("/login", response_class=HTMLResponse)
+def login(username:str=Form(...), password:str=Form(...), db:Session=Depends(get_db)):
+    u = db.query(User).filter(User.username==username).first()
+    if not u or not verify_password(password, u.password):
+        return HTMLResponse("<h3>账号密码错误</h3><a href='/page'>返回</a>")
+    token = str(uuid4())
+    login_users[token] = username
+    res = HTMLResponse("<h3>登录成功</h3><a href='/users_page'>查看用户列表</a>")
+    res.set_cookie("token", token)
+    return res
 
-
-# 新增：查看所有数据库里的用户
-@app.get("/users")
-def get_all_users(db: Session = Depends(get_db)):
-    users = db.query(User).all()
-    return {"users": users}
-
-# 新增：页面版 —— 查看所有用户（从数据库读取）
 @app.get("/users_page", response_class=HTMLResponse)
-def show_users_page(db: Session = Depends(get_db)):
+def users_page(db:Session=Depends(get_db), name=Depends(require_login)):
     users = db.query(User).all()
-
-    # 拼接用户列表 HTML
-    user_items = ""
-    for user in users:
-        user_items += f"<li>ID：{user.id} | 姓名：{user.username} | 年龄：{user.age}</li>"
-
-    html = f"""
-    <html>
-        <head>
-            <title>用户列表</title>
-            <style>
-                body {{ font-family: 微软雅黑; margin: 40px; }}
-                .box {{ padding: 20px; background: #f5f5f5; border-radius: 8px; max-width: 500px; }}
-                li {{ margin: 8px 0; font-size: 16px; }}
-            </style>
-        </head>
-        <body>
-            <h1>📋 数据库用户列表</h1>
-            <div class="box">
-                <ul>
-                    {user_items}
-                </ul>
-                <br>
-                <a href="/page">返回表单页面</a>
-            </div>
-        </body>
-    </html>
-    """
-    return html
+    li = "".join([f"<li>{u.id} - {u.username} - {u.age}</li>" for u in users])
+    return HTMLResponse(f"<h3>欢迎 {name}</h3><ul>{li}</ul>")
