@@ -1,11 +1,19 @@
+from pathlib import Path
 from fastapi import FastAPI, Form, Depends, HTTPException, Cookie
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from uuid import uuid4
+from jinja2 import Environment, FileSystemLoader
 
 from database import engine, SessionLocal
 from models import Base, User
 from utils import get_password_hash, verify_password
+
+_tpl_env = Environment(loader=FileSystemLoader(str(Path(__file__).parent / "templates")))
+
+def render(name: str, context: dict) -> HTMLResponse:
+    template = _tpl_env.get_template(name)
+    return HTMLResponse(template.render(**context))
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI()
@@ -24,28 +32,9 @@ def require_login(token: str = Cookie(None)):
         raise HTTPException(status_code=403, detail="请先登录")
     return login_users[token]
 
-@app.get("/page", response_class=HTMLResponse)
+@app.get("/page")
 def page():
-    return HTMLResponse("""
-    <html>
-        <body>
-        <h2>注册</h2>
-        <form action="/register" method="post">
-            <input name="username" placeholder="用户名" required><br>
-            <input name="age" type="number" placeholder="年龄" required><br>
-            <input name="password" type="password" placeholder="密码" required><br>
-            <button>注册</button>
-        </form>
-        <hr>
-        <h2>登录</h2>
-        <form action="/login" method="post">
-            <input name="username" placeholder="用户名" required><br>
-            <input name="password" type="password" placeholder="密码" required><br>
-            <button>登录</button>
-        </form>
-        </body>
-    </html>
-    """)
+    return render("index.html", {})
 
 @app.post("/register")
 def register(username: str=Form(...), age:int=Form(...), password:str=Form(...), db:Session=Depends(get_db)):
@@ -56,19 +45,18 @@ def register(username: str=Form(...), age:int=Form(...), password:str=Form(...),
     db.commit()
     return {"msg":"注册成功"}
 
-@app.post("/login", response_class=HTMLResponse)
+@app.post("/login")
 def login(username:str=Form(...), password:str=Form(...), db:Session=Depends(get_db)):
     u = db.query(User).filter(User.username==username).first()
     if not u or not verify_password(password, u.password):
-        return HTMLResponse("<h3>账号密码错误</h3><a href='/page'>返回</a>")
+        return render("login_result.html", {"success": False, "message": "账号密码错误"})
     token = str(uuid4())
     login_users[token] = username
-    res = HTMLResponse("<h3>登录成功</h3><a href='/users_page'>查看用户列表</a>")
+    res = render("login_result.html", {"success": True, "message": "登录成功"})
     res.set_cookie("token", token)
     return res
 
-@app.get("/users_page", response_class=HTMLResponse)
+@app.get("/users_page")
 def users_page(db:Session=Depends(get_db), name=Depends(require_login)):
     users = db.query(User).all()
-    li = "".join([f"<li>{u.id} - {u.username} - {u.age}</li>" for u in users])
-    return HTMLResponse(f"<h3>欢迎 {name}</h3><ul>{li}</ul>")
+    return render("users.html", {"username": name, "users": users})
